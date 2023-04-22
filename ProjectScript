@@ -1,0 +1,174 @@
+#!/bin/env python4
+
+#Import Dependencies
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Activation, Flatten
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Dropout
+from tensorflow.keras.models import load_model
+import tensorflow.keras.layers as layers
+from hyperopt import hp, fmin, tpe, space_eval, Trials, STATUS_OK
+
+#Write checkpoint to output file
+with open('output.txt', 'w') as f:
+    # Write some text to the file
+    f.write('Imported, loeading data')
+
+#Identify training and testing dataset
+training_data_directory ='Training' # '/home/hall298/ML_Project/brain tumor MRI images/train'
+test_data_directory ='Testing' # '/home/hall298/ML_Project/brain tumor MRI images/val'
+
+#Initialize data loading tools
+training_data_processor = ImageDataGenerator(
+    rescale = 1./255,
+    horizontal_flip = True,
+    zoom_range = 0.2,
+    rotation_range = 10,
+    shear_range = 0.2,
+    height_shift_range = 0.1,
+    width_shift_range = 0.1
+)
+
+test_data_processor = ImageDataGenerator(rescale = 1./255)
+
+#Load Data
+training_data = training_data_processor.flow_from_directory(
+    training_data_directory,
+    target_size = (256, 256),
+    batch_size = 32,
+    class_mode = 'categorical',
+)
+
+testing_data = test_data_processor.flow_from_directory(
+    test_data_directory,
+    target_size = (256 ,256),
+    batch_size = 32,
+    class_mode = 'categorical',
+    shuffle = False
+)
+#Write checkpoint to output file
+with open('output.txt', 'w') as f:
+    # Write some text to the file
+    f.write('Loded Diper, Optimizing Hyperparameters ')
+
+#Define Hyperopt search space
+space = {
+    'num_conv_layers': hp.choice('num_conv_layers', [1,2]),
+    'num_dense_layers': hp.choice('num_dense_layers',[1,2]),
+    'batch_size': hp.choice('batch_size', [32, 64, 128]),
+    'dropout': hp.uniform('dropout', 0, 1),
+    'learning_rate': hp.loguniform('learning_rate', -5, -1),
+    'kernel_size': hp.choice('kernel_size', [(7, 7),(10,10),(15,15),(20,20)]),
+    'filters': hp.quniform('filters', 32, 128, 32),
+    'dense_size': hp.quniform('dense_size',64, 512, 64)
+
+}
+
+#Define function for hyperopt to iterate over
+def objective(params):
+
+    model = Sequential()
+
+
+    model.add(Conv2D(int(params['filters']),params['kernel_size'], input_shape=(256,256, 3)))
+    model.add(Activation('relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+
+    for _ in range(int(params['num_conv_layers'])-1):
+        model.add(Conv2D(params['filters'], params['kernel_size']))
+        model.add(Activation('relu'))
+        model.add(MaxPooling2D(pool_size=(2, 2)))
+
+
+    model.add(Flatten())
+
+
+    for _ in range(params['num_dense_layers']):
+        model.add(Dense(params['dense_size']))
+        model.add(Activation('relu'))
+        model.add(Dropout(params['dropout']))
+
+
+    model.add(Dense(4))
+    model.add(Activation('softmax'))
+
+
+    model.compile(loss='categorical_crossentropy',
+                    optimizer='adam',
+                    metrics=['accuracy'],
+                    )
+
+
+    model.fit(training_data,
+              batch_size = params['batch_size'],
+              epochs=20,
+              verbose = 0,
+              validation_data = testing_data)
+    score,acc = model.evaluate(testing_data, verbose = 0)
+    return {'loss': -acc, 'status': STATUS_OK}
+
+#Load hyperopt, evaluate, and return best params
+trials = Trials()
+best = fmin(fn=objective, space = space, algo = tpe.suggest, max_evals = 10 , trials = trials)
+best_params = space_eval(space, best)
+
+#Write best params from hyperopt to text file
+with open('bestparams.txt', 'w') as f:
+    # Write some text to the file
+    f.write(str(best_params))
+
+#Write checkpoint to hyperopt
+with open('output.txt', 'w') as f:
+    # Write some text to the file
+    f.write('Hyperparameters Optimized, Training Final Model')
+
+
+#Train the final models with the best parameters
+model = Sequential()
+
+model.add(Conv2D(int(best_params['filters']), best_params['kernel_size'], input_shape=(256,256, 3)))
+model.add(Activation('relu'))
+model.add(MaxPooling2D(pool_size=(2, 2)))
+
+for _ in range(int(best_params['num_conv_layers'])-1):
+    model.add(Conv2D(best_params['filters'], best_params['kernel_size']))
+    model.add(Activation('relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+
+model.add(Flatten())
+
+for _ in range(best_params['num_dense_layers']):
+    model.add(Dense(best_params['dense_size']))
+    model.add(Activation('relu'))
+    model.add(Dropout(best_params['dropout']))
+
+model.add(Dense(4))
+model.add(Activation('softmax'))
+
+model.compile(loss='categorical_crossentropy',
+              optimizer='adam',
+              metrics=['accuracy'])
+
+
+model.fit(training_data,
+          batch_size=best_params['batch_size'],
+          epochs=20,
+          verbose=0,
+          validation_data=testing_data)
+
+#Write checkpoint to output file
+with open('output.txt', 'w') as f:
+    # Write some text to the file
+    f.write('Model Trained, Saving')
+
+#Save the model
+model.save('BrainTumors.h5')
+
+#Write final checkpoint to output file
+with open('output.txt', 'w') as f:
+    # Write some text to the file
+    f.write('Model Saved')
